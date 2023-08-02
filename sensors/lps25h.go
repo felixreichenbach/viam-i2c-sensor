@@ -37,18 +37,18 @@ const (
 
 // Config is used for converting config attributes.
 type Config struct {
-	Board   string `json:"board"`
-	I2CBus  string `json:"i2c_bus"`
-	I2cAddr int    `json:"i2c_addr,omitempty"`
+	BoardName string `json:"board"`
+	I2CBus    string `json:"i2c_bus"`
+	I2cAddr   int    `json:"i2c_addr,omitempty"`
 }
 
 // Validate ensures all parts of the config are valid.
 func (conf *Config) Validate(path string) ([]string, error) {
 	var deps []string
-	if len(conf.Board) == 0 {
+	if len(conf.BoardName) == 0 {
 		return nil, utils.NewConfigValidationFieldRequiredError(path, "board")
 	}
-	deps = append(deps, conf.Board)
+	deps = append(deps, conf.BoardName)
 	if len(conf.I2CBus) == 0 {
 		return nil, utils.NewConfigValidationFieldRequiredError(path, "i2c bus")
 	}
@@ -60,19 +60,7 @@ func init() {
 		sensor.API,
 		LPS25HModel,
 		resource.Registration[sensor.Sensor, *Config]{
-			Constructor: func(
-				ctx context.Context,
-				deps resource.Dependencies,
-				conf resource.Config,
-				logger golog.Logger,
-				// TODO: Verify newConf as difers to Shawn's code
-			) (sensor.Sensor, error) {
-				newConf, err := resource.NativeConfig[*Config](conf)
-				if err != nil {
-					return nil, err
-				}
-				return newSensor(ctx, deps, conf.ResourceName(), newConf, logger)
-			},
+			Constructor: newSensor,
 		},
 	)
 }
@@ -80,46 +68,50 @@ func init() {
 func newSensor(
 	ctx context.Context,
 	deps resource.Dependencies,
-	name resource.Name,
-	conf *Config,
+	conf resource.Config,
 	logger golog.Logger,
 ) (
 	sensor.Sensor, error,
 ) {
-	b, err := board.FromDependencies(deps, conf.Board)
+
+	newConf, err := resource.NativeConfig[*Config](conf)
+	if err != nil {
+		return nil, err
+	}
+	b, err := board.FromDependencies(deps, newConf.BoardName)
 	if err != nil {
 		return nil, fmt.Errorf("lps25h init: failed to find board: %w", err)
 	}
 	localB, ok := b.(board.LocalBoard)
 	if !ok {
-		return nil, fmt.Errorf("board %s is not local", conf.Board)
+		return nil, fmt.Errorf("board %s is not local", newConf.BoardName)
 	}
-	i2cbus, ok := localB.I2CByName(conf.I2CBus)
+	i2cbus, ok := localB.I2CByName(newConf.I2CBus)
 	if !ok {
-		return nil, fmt.Errorf("lps25h init: failed to find i2c bus %s", conf.I2CBus)
+		return nil, fmt.Errorf("lps25h init: failed to find i2c bus %s", newConf.I2CBus)
 	}
-	addr := conf.I2cAddr
+	addr := newConf.I2cAddr
 	if addr == 0 {
 		addr = defaultI2Caddr
 		logger.Warn("using i2c address : 0x5c")
 	}
 
-	s := &lps25h{
-		Named:    name.AsNamed(),
+	sensor := &lps25h{
+		Named:    conf.ResourceName().AsNamed(), //name.AsNamed(),
 		logger:   logger,
 		bus:      i2cbus,
 		addr:     byte(addr),
 		lastTemp: -999, // initialize to impossible temp
 	}
 
-	err = s.reset(ctx)
+	err = sensor.reset(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// TODO: Check if reset handling logic needs to be added from bme280 starting at line 158
 
-	return s, nil
+	return sensor, nil
 }
 
 // lps25h is a sensor device
@@ -131,10 +123,10 @@ type lps25h struct {
 	mu     sync.Mutex
 	logger golog.Logger
 
-	bus         board.I2C
-	addr        byte
-	calibration map[string]int
-	lastTemp    float64 // Store raw data from temp for humidity calculations
+	bus  board.I2C
+	addr byte
+	//calibration map[string]int
+	lastTemp float64 // Store raw data from temp for humidity calculations
 
 }
 
